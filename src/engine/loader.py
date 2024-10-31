@@ -4,6 +4,7 @@ from datasets import load_dataset
 import os
 import torchvision
 import torch
+from transformers import AutoImageProcessor, AutoModelForImageClassification
 
 class ImageNet100Dataset(Dataset):
     def __init__(self, dataset, transform=None):
@@ -81,19 +82,24 @@ def load_cifar100(num_replicas, rank):
     val_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
     return train_dataloader, val_loader
 
-def load_resnet(model_name, pretrained):
+def load_cv_model(model_name, pretrained):
+    model_path = f'./models/{model_name}.pth'
     if model_name=='resnet152':
-        model = models.resnet152(pretrained)
+        model = models.resnet152()
+        model.load_state_dict(torch.load(model_path))
     if model_name=='resnet18':
-        model = models.resnet18(pretrained)
+        model = models.resnet18()
+        model.load_state_dict(torch.load(model_path))
     if model_name=='resnet101':
-        model = models.resnet101(pretrained)
-    return model
-
-def load_vgg(model_name):
+        model = models.resnet101()
+        model.load_state_dict(torch.load(model_path))
     if model_name=='vgg16':
         model = models.vgg16()
-    if model_name=='vgg':
-        model = models.vgg19()
+        torch.save(model.state_dict(), model_path)
+    if model_name=='vgg19':
+        model = models.vgg19(pretrained)
+        torch.save(model.state_dict(), model_path)
+    if model_name=='vit-base16':
+        model = AutoModelForImageClassification.from_pretrained(model_path)  
     return model
-    
+
