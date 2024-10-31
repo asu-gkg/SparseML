@@ -53,9 +53,8 @@ def pruning_aware_terngrad_hook(state, bucket):
     compressed_data, scalar = tensor_compressed
     all_reduce(compressed_data, op=ReduceOp.SUM)
     all_reduce(scalar, op=ReduceOp.AVG)
-    
-    decompressed_tensor = pruning_aware_terngrad_compressor.decompress((compressed_data, scalar), numel)
-    pruning_aware_terngrad_compressor.record_zeros_positions(bucket, decompressed_tensor)
+    decompressed_tensor = pruning_aware_terngrad_compressor.decompress((compressed_data, scalar), numel, bucket)
+    pruning_aware_terngrad_compressor.zero_mask_track(bucket, decompressed_tensor)
     fut = torch.futures.Future()
     fut.set_result(decompressed_tensor)
     return fut

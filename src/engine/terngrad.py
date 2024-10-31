@@ -32,11 +32,14 @@ class TernGradCompressor():
 class PruningAwareTernGradCompressor():
     def __init__(self):
         self.mask_map = {}
+        self.update_count_map = {}
+        self.stable_map = {}
         
     def compress(self, bucket):
         tensor = bucket.buffer()
         shape = tensor.size()
         tensor = tensor.flatten()
+        index = bucket.index()
 
         std = (tensor - torch.mean(tensor)) ** 2
         std = torch.sqrt(torch.mean(std))
@@ -45,34 +48,49 @@ class PruningAwareTernGradCompressor():
         abs_gradient = gradient.abs()
         scalar = abs_gradient.max()
         
-        # 直接使用梯度的符号，不进行额外的随机置零
         sign_gradient = gradient.sign() * scalar
         new_sign = sign_gradient.sign()  # -1, 0, 1
 
+        if index in self.stable_map and self.stable_map[index]:
+            new_sign = new_sign[~self.mask_map[index]]
+
         tensor_compressed = new_sign.type(torch.int8), scalar.flatten()
-
+        
         return tensor_compressed, shape
-
-    def record_zeros_positions(self, bucket, decompressed_tensor):
+    
+    def zero_mask_track(self, bucket, decompressed_tensor):
         index = bucket.index()
-        if index not in self.mask_map:
-            self.mask_map[index] = (decompressed_tensor == 0).type(torch.bool)
+        current_mask = (decompressed_tensor == 0).type(torch.bool)
+        if index not in self.mask_map or self.mask_map[index].size() != current_mask.size():
+            self.mask_map[index] = current_mask
+            return 
+        previous_mask = self.mask_map[index]
+        self.mask_map[index] = previous_mask & current_mask
+        
+        num_updates = (self.mask_map[index] != previous_mask).sum().item()
+        self.stable_track(index=index, num_updates=num_updates)
+    
+    def stable_track(self, index, num_updates):
+        if index not in self.stable_map:
+            self.stable_map[index] = False
+        if self.stable_map[index]:
+            return 
+        if num_updates == 0:
+            self.update_count_map[index] += 1
         else:
-            previous_mask = self.mask_map[index]
-            current_mask = (decompressed_tensor == 0).type(torch.bool)
-            if previous_mask.size() != current_mask.size():
-                print(f'previous_mask.size: {previous_mask.size()}, current_mask.size: {current_mask.size()}')
-                self.mask_map[index] = current_mask
-                return 
-            self.mask_map[index] = previous_mask & current_mask
-            
-            updates = (previous_mask != current_mask) & (current_mask == False)
-            num_updates = updates.sum().item()
-            sparsity = (self.mask_map[index] == True).sum().item()
-            print(bucket.index(), bucket.buffer().size(), num_updates, sparsity)
+            self.update_count_map[index] = 0
 
-    def decompress(self, tensor_compressed, shape):
-        tensor_compressed, scalar = tensor_compressed
-        sign = tensor_compressed.type(torch.float32)
+        if self.update_count_map[index] >= 10:
+            self.stable_map[index] = True
+            print(f'index {index} is stable')
+
+    def decompress(self, compressed_data, shape, bucket):
+        index = bucket.index()
+        tensor_compressed, scalar = compressed_data
+        if tensor_compressed.size() != shape:
+            sign = torch.zeros(shape, dtype=torch.float32, device=tensor_compressed.device)
+            sign[~self.mask_map[index]] = tensor_compressed.type(torch.float32)
+        else:
+            sign = tensor_compressed.type(torch.float32)
         tensor_decompressed = sign * scalar
-        return tensor_decompressed.view(shape)
+        return tensor_decompressed
